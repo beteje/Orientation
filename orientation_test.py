@@ -6,24 +6,24 @@ import plot_orientation as po
 
 # %gui qt
 
-lat_rng = (10, 179)
+elvtn_rng = (10, 179)
 azth_rng = (0, 179)
-volume_size = (512, 512, 512)
-n_fibres = 2
+volume_size = (128, 128, 128)
+n_fibres = 5
 radius_lim = (3, 10)
 length_lim = (0.4, 0.9)
 gap_lim = 1
 intersect = False
 PSNR = 10
 smooth_lvl = 0
-volume = sim.make_volume(volume_size, n_fibres, lat_rng, azth_rng, radius_lim, length_lim, gap_lim, intersect, PSNR, smooth_lvl)
+volume = sim.make_volume(volume_size, n_fibres, elvtn_rng, azth_rng, radius_lim, length_lim, gap_lim, intersect, PSNR, smooth_lvl)
 
 # plot histograms of angles
 po.plot_histogram(volume['elvtn'], 'Elevation', (0, 180), 'darkgreen')
 po.plot_histogram(volume['azth'], 'Azimuth', (0, 180), 'darkblue')
 
 # plot slices of original and noisy data
-po.plot_slices(volume['data'], volume['noisy_data'], 128)
+po.plot_slices(volume['data'], volume['noisy_data'], 50)
 
 # plot colour wheel
 po.plot_color_wheel((0,180), (0,180))

@@ -2,6 +2,8 @@ import numpy as np
 from skimage.draw import circle
 from skimage.morphology import ball
 from scipy import ndimage as ndi
+import multiprocessing
+from itertools import repeat
 
 def make_volume(volume_size, n_fibres, elvtn_rng, azth_rng, radius_lim, length_lim, gap, intersect, PSNR, smooth_lvl):
     # set limits for the data generation
@@ -18,28 +20,31 @@ def make_volume(volume_size, n_fibres, elvtn_rng, azth_rng, radius_lim, length_l
     n_generated = 0
     n_fails = 0
     while n_generated < n_fibres and n_fails < max_fails:
-        # create the fibre
-        fibre, gap_fibre, elvtn, azth, radius = generate_fibre(volume_size, length_lim, radius_lim, azth_rng, elvtn_rng, 
-                                                               gap, max_len_loss)
+        # create fibres
+        n = min(4, n_fibres-n_generated)
+        params = [volume_size, length_lim, radius_lim, azth_rng, elvtn_rng, gap, max_len_loss]
+        with multiprocessing.Pool(processes=n) as pool:
+            fibres = pool.starmap(generate_fibre, repeat(params, n))
 
-        # if intersection is not allowed check if any fibres already exist in the gap region
-        if not intersect:
-            if np.any(volume[gap_fibre[:, 0], gap_fibre[:, 1], gap_fibre[:, 2]]):
-                n_fails += 1
-                print("The number of fails is {}".format(n_fails))
-                if n_fails == max_fails:
-                    print("Maximum number of fails exceeded. Generated {} fibres".format(n_generated))
+        for f in fibres:
+            # if intersection is not allowed check if any fibres already exist in the gap region
+            if not intersect:
+                if np.any(volume[f['gap_fibre'][:, 0], f['gap_fibre'][:, 1], f['gap_fibre'][:, 2]]):
+                    n_fails += 1
+                    print("The number of fails is {}".format(n_fails))
+                    if n_fails == max_fails:
+                        print("Maximum number of fails exceeded. Generated {} fibres".format(n_generated))
 
-                continue
+                    continue
             
-        # add the fibre to the volume
-        volume[fibre[:, 0], fibre[:, 1], fibre[:, 2]] = 1
-        elvtn_data[fibre[:, 0], fibre[:, 1], fibre[:, 2]] = elvtn
-        azth_data[fibre[:, 0], fibre[:, 1], fibre[:, 2]] = azth
-        diameter[fibre[:, 0], fibre[:, 1], fibre[:, 2]] = radius * 2
-        n_generated += 1
-        n_fails = 0
-        print("The number of generated fibres is {}".format(n_generated))
+            # add the fibre to the volume
+            volume[f['fibre'][:, 0], f['fibre'][:, 1], f['fibre'][:, 2]] = 1
+            elvtn_data[f['fibre'][:, 0], f['fibre'][:, 1], f['fibre'][:, 2]] = f['elvtn']
+            azth_data[f['fibre'][:, 0], f['fibre'][:, 1], f['fibre'][:, 2]] = f['azth']
+            diameter[f['fibre'][:, 0], f['fibre'][:, 1], f['fibre'][:, 2]] = f['radius'] * 2
+            n_generated += 1
+            n_fails = 0
+            print("The number of generated fibres is {}".format(n_generated))
     
     # smooth the data    
     data = ndi.median_filter(volume, footprint=ball(median_rad))
@@ -158,7 +163,7 @@ def generate_fibre(volume_size, length_lim, radius_lim, azth_rng, elvtn_rng, gap
         # calculate the length of the gap fibre                                                
         gap_fibre_len = np.round(n_slices).astype(np.int32)
     
-    return fibre, gap_fibre, elvtn, azth, radius
+    return {'fibre': fibre, 'gap_fibre': gap_fibre, 'elvtn': elvtn, 'azth': azth, 'radius': radius}
 
 def add_noise(data, PSNR, smooth_lvl):    
     data = data.astype(np.float32)
@@ -189,8 +194,8 @@ if __name__ == '__main__':
     # disordered
     # elvtn_rng = (0, 90)
     # azth_rng = (-89, 90)
-    volume_size = (256, 256, 256)
-    n_fibres = 1
+    volume_size = (128, 128, 128)
+    n_fibres = 4
     radius_lim = (2, 4)
     length_lim = (0.2, 0.8)
     gap = 3 
