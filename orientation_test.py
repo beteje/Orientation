@@ -6,10 +6,10 @@ import plot_orientation as po
 
 # %gui qt
 
-elvtn_rng = (10, 179)
-azth_rng = (0, 179)
-volume_size = (128, 128, 128)
-n_fibres = 5
+elvtn_rng = (45, 60)
+azth_rng = (120, 150)
+volume_size = (512, 512, 512)
+n_fibres = 100
 radius_lim = (3, 10)
 length_lim = (0.4, 0.9)
 gap_lim = 1
@@ -30,17 +30,17 @@ po.plot_color_wheel((0,180), (0,180))
 
 # create a 3d canvas to display the fibres
 X, Y, Z = volume['data'].nonzero()
-canvas_volume = po.Canvas()
+# canvas_volume = po.Canvas()
 n = len(Z)
-ps = canvas_volume.pixel_scale
-volume_data = np.zeros(n, [('a_position', np.float32, 3),
-                    ('a_color', np.float32, 4),
-                    ('a_size', np.float32)])
-volume_data['a_position'] = np.array([2*X/volume_size[0]-1, 2*Y/volume_size[1]-1, 2*Z/volume_size[2]-1]).T
-volume_data['a_color'] = np.concatenate((np.zeros((n, 3)), np.ones((n,1))), axis=1)
-volume_data['a_size'] = np.ones(n) * ps * 2 * np.sqrt(2)
-canvas_volume.data_prog.bind(gloo.VertexBuffer(volume_data))
-canvas_volume.app.run()
+# ps = canvas_volume.pixel_scale
+# volume_data = np.zeros(n, [('a_position', np.float32, 3),
+#                     ('a_color', np.float32, 4),
+#                     ('a_size', np.float32)])
+# volume_data['a_position'] = np.array([2*X/volume_size[0]-1, 2*Y/volume_size[1]-1, 2*Z/volume_size[2]-1]).T
+# volume_data['a_color'] = np.concatenate((np.zeros((n, 3)), np.ones((n,1))), axis=1)
+# volume_data['a_size'] = np.ones(n) * ps * 2 * np.sqrt(2)
+# canvas_volume.data_prog.bind(gloo.VertexBuffer(volume_data))
+# canvas_volume.app.run()
 
 # generate the rgb colors for each of the points
 clrs = np.zeros((n,3), dtype=np.float32)

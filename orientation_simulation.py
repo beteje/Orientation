@@ -1,14 +1,15 @@
 import numpy as np
 from skimage.draw import circle
-from skimage.morphology import ball
+# from skimage.morphology import ball
 from scipy import ndimage as ndi
 import multiprocessing
 from itertools import repeat
+import fill_voids
 
 def make_volume(volume_size, n_fibres, elvtn_rng, azth_rng, radius_lim, length_lim, gap, intersect, PSNR, smooth_lvl):
     # set limits for the data generation
     max_fails = 100
-    median_rad = 3
+    # median_rad = 3
     max_len_loss = 0.5
     
     # initialize data
@@ -21,9 +22,10 @@ def make_volume(volume_size, n_fibres, elvtn_rng, azth_rng, radius_lim, length_l
     n_fails = 0
     while n_generated < n_fibres and n_fails < max_fails:
         # create fibres
-        n = min(4, n_fibres-n_generated)
+        n_cores = multiprocessing.cpu_count()
+        n = max(n_fibres-n_generated, n_cores)
         params = [volume_size, length_lim, radius_lim, azth_rng, elvtn_rng, gap, max_len_loss]
-        with multiprocessing.Pool(processes=n) as pool:
+        with multiprocessing.Pool(processes=n_cores) as pool:
             fibres = pool.starmap(generate_fibre, repeat(params, n))
 
         for f in fibres:
@@ -37,25 +39,20 @@ def make_volume(volume_size, n_fibres, elvtn_rng, azth_rng, radius_lim, length_l
 
                     continue
             
-            # add the fibre to the volume
-            volume[f['fibre'][:, 0], f['fibre'][:, 1], f['fibre'][:, 2]] = 1
-            elvtn_data[f['fibre'][:, 0], f['fibre'][:, 1], f['fibre'][:, 2]] = f['elvtn']
-            azth_data[f['fibre'][:, 0], f['fibre'][:, 1], f['fibre'][:, 2]] = f['azth']
-            diameter[f['fibre'][:, 0], f['fibre'][:, 1], f['fibre'][:, 2]] = f['radius'] * 2
-            n_generated += 1
-            n_fails = 0
-            print("The number of generated fibres is {}".format(n_generated))
-    
-    # smooth the data    
-    data = ndi.median_filter(volume, footprint=ball(median_rad))
-    elvtn_data = ndi.median_filter(elvtn_data, footprint=ball(median_rad))
-    azth_data = ndi.median_filter(azth_data, footprint=ball(median_rad))
-    diameter = ndi.median_filter(diameter, footprint=ball(median_rad))
+            if n_generated < n_fibres:
+                # add the fibre to the volume
+                volume[f['fibre'][:, 0], f['fibre'][:, 1], f['fibre'][:, 2]] = 1
+                elvtn_data[f['fibre'][:, 0], f['fibre'][:, 1], f['fibre'][:, 2]] = f['elvtn']
+                azth_data[f['fibre'][:, 0], f['fibre'][:, 1], f['fibre'][:, 2]] = f['azth']
+                diameter[f['fibre'][:, 0], f['fibre'][:, 1], f['fibre'][:, 2]] = f['radius'] * 2
+                n_generated += 1
+                n_fails = 0
+                print("The number of generated fibres is {}".format(n_generated))
     
     # add noise to the data
-    noisy_data = add_noise(data, PSNR, smooth_lvl)
+    noisy_data = add_noise(volume, PSNR, smooth_lvl)
     
-    out = {'data': data,
+    out = {'data': volume,
            'noisy_data': noisy_data,
            'elvtn': elvtn_data,
            'azth': azth_data,
@@ -64,6 +61,7 @@ def make_volume(volume_size, n_fibres, elvtn_rng, azth_rng, radius_lim, length_l
     return out
 
 def generate_fibre(volume_size, length_lim, radius_lim, azth_rng, elvtn_rng, gap, max_len_loss):
+    np.random.seed()
     length = min(volume_size)
     gap_fibre_len = 0
     
@@ -139,7 +137,7 @@ def generate_fibre(volume_size, length_lim, radius_lim, azth_rng, elvtn_rng, gap
         # fill in any holes
         volume = np.zeros(volume_size, dtype=np.uint8)
         volume[fibre[:, 0], fibre[:, 1], fibre[:, 2]] = 1
-        volume = ndi.binary_fill_holes(volume)
+        volume = fill_voids.fill(volume)
         fibre = np.empty((np.count_nonzero(volume), 3), dtype=np.uint32)
         fibre[:, 0], fibre[:, 1], fibre[:, 2] = volume.nonzero()
         
@@ -153,12 +151,6 @@ def generate_fibre(volume_size, length_lim, radius_lim, azth_rng, elvtn_rng, gap
                 n_slices += 1
                 gap_fibre = slice_pts if gap_fibre is None else \
                                                     np.concatenate((gap_fibre, slice_pts))
-    
-        volume = np.zeros(volume_size, dtype=np.uint8)
-        volume[gap_fibre[:, 0], gap_fibre[:, 1], gap_fibre[:, 2]] = 1
-        volume = ndi.binary_fill_holes(volume)
-        gap_fibre = np.empty((np.count_nonzero(volume), 3), dtype=np.uint32)
-        gap_fibre[:, 0], gap_fibre[:, 1], gap_fibre[:, 2] = volume.nonzero()
         
         # calculate the length of the gap fibre                                                
         gap_fibre_len = np.round(n_slices).astype(np.int32)
