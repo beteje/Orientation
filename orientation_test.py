@@ -6,8 +6,8 @@ import plot_orientation as po
 
 # %gui qt
 
-elvtn_rng = (45, 60)
-azth_rng = (120, 150)
+elvtn_rng = (0, 180)
+azth_rng = (0, 180)
 volume_size = (512, 512, 512)
 n_fibres = 100
 radius_lim = (3, 10)

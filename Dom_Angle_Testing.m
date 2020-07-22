@@ -16,8 +16,8 @@ sigma = 2;
 
 PSNR = 20;
 
-azimuth_array = rand(1).*180.*ones(1,500);
-elevation_array = (rand(1,10)./1 + 0.00).*180;
+azimuth_array = rand(1).*180.*ones(1,100);
+elevation_array = (rand(1)./1 + 0.00).*180;
 
 % azimuth_array = 178 + rand;
 % elevation_array = 50+rand;
@@ -33,13 +33,14 @@ theta_estY = zeros(length(s_array),length(azimuth_array),length(elevation_array)
 phi_estT = zeros(length(s_array),length(azimuth_array),length(elevation_array));
 theta_estT = zeros(length(s_array),length(azimuth_array),length(elevation_array));
 
-
+index_e = 1;
 for index_outer = 1:length(s_array)
-for index_a = 1:length(azimuth_array)
+parfor index_a = 1:length(azimuth_array)
     azimuth1 = azimuth_array(index_a);
-    for index_e = 1:length(elevation_array)
-        disp(['index_a = ', num2str(index_a/length(azimuth_array)*100,'%.0f')...
-            ,'%, index_e = ', num2str(index_e/length(elevation_array)*100,'%.0f'),'%']); 
+    
+%     for index_e = 1:length(elevation_array)
+%         disp(['index_a = ', num2str(index_a/length(azimuth_array)*100,'%.0f')...
+%             ,'%, index_e = ', num2str(index_e/length(elevation_array)*100,'%.0f'),'%']); 
         elevation1 = elevation_array(index_e);
         
         A = imagebuild(azimuth1,elevation1,Line_fn,M,N,P);
@@ -92,7 +93,6 @@ for index_a = 1:length(azimuth_array)
         Gy1 = Gy((26-W):(26+W),(26-W):(26+W),(26-W):(26+W));
         Gz1 = Gz((26-W):(26+W),(26-W):(26+W),(26-W):(26+W));
         
-        
         % 2D Search
         % Initialise 5D Matrix to hold data
         Z = zeros(N_angle1,N_angle2);
@@ -122,8 +122,8 @@ for index_a = 1:length(azimuth_array)
         [~,i2] = min(Z(:));
         [i1,i2] = ind2sub([N_angle1,N_angle2],i2);
         
-        Z1(1,1,1,:,:) = Z;
-        [Delta_theta,Delta_phi]=subSample2D(Z1,i1,i2,res1,res2);
+%         Z1(1,1,1,:,:) = Z;
+        [Delta_theta,Delta_phi]=subSample2D(reshape(Z,1,1,1,N_angle1,N_angle2),i1,i2,res1,res2);
         Angle_A1 = [angle_vector2(i2),angle_vector1(i1)]+[Delta_phi,Delta_theta];
         
         if Angle_A1(1)<0
@@ -131,8 +131,8 @@ for index_a = 1:length(azimuth_array)
             Angle_A1(2) = 180-Angle_A1(2);
         end
         
-        [~,i2] = max(Y(:));
-        [i1,i2] = ind2sub([N_angle1,N_angle2],i2);
+%         [~,i2] = max(Y(:));
+%         [i1,i2] = ind2sub([N_angle1,N_angle2],i2);
         
 %         Y1(1,1,1,:,:) = Y;
 %         [Delta_theta1,Delta_phi1]=subSample2D(Y1,i1,i2,res1,res2);
@@ -142,7 +142,6 @@ for index_a = 1:length(azimuth_array)
 %             Angle_B1(1) = Angle_B1(1)+180;
 %             Angle_B1(2) = 180-Angle_B1(2);
 %         end
-        
         T = [Gx1(:).';Gy1(:).';Gz1(:).']*[Gx1(:).';Gy1(:).';Gz1(:).']'./W^6;
         [V,D] = eigs(T,1,'smallestabs');
         Angle_T = [atan2(V(1),V(2))*180./pi, acos(V(3)).*180./pi];
@@ -160,7 +159,7 @@ for index_a = 1:length(azimuth_array)
         phi_estT(index_outer,index_a,index_e) = Angle_T(1);
         theta_estT(index_outer,index_a,index_e) = Angle_T(2);
         
-    end
+%     end
 end
 end
 
