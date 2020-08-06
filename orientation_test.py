@@ -3,20 +3,22 @@ import orientation_simulation as sim
 from matplotlib.colors import hsv_to_rgb
 from vispy import gloo
 import plot_orientation as po
+import scipy.io as sio
 
 # %gui qt
 
 elvtn_rng = (0, 180)
 azth_rng = (0, 180)
-volume_size = (512, 512, 512)
-n_fibres = 100
-radius_lim = (3, 10)
-length_lim = (0.4, 0.9)
+volume_size = (256, 256, 256)
+n_fibres = 50
+radius_lim = (2, 10)
+length_lim = (0.3, 0.9)
 gap_lim = 1
 intersect = False
-PSNR = 10
+PSNR = 30
 smooth_lvl = 0
 volume = sim.make_volume(volume_size, n_fibres, elvtn_rng, azth_rng, radius_lim, length_lim, gap_lim, intersect, PSNR, smooth_lvl)
+sio.savemat('testData.mat', volume)
 
 # plot histograms of angles
 po.plot_histogram(volume['elvtn'], 'Elevation', (0, 180), 'darkgreen')

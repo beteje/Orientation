@@ -152,9 +152,10 @@ def plot_color_wheel(az_lim, ev_lim):
     
     ax.imshow(rgb_array)
     plt.show()
-    
+
+# -----------------------------------------------------------------------------
 def plot_slices(data, noisy_data, slice_no):
-    fig, axs = plt.subplots(2, 2)
+    fig, axs = plt.subplots(3, 2)
     axs[0, 0].imshow(data[:, :, slice_no], cmap=plt.cm.get_cmap('Greys'), origin='lower')
     axs[0, 0].set(xlabel='x axis', ylabel='y axis')
 
@@ -174,6 +175,16 @@ def plot_slices(data, noisy_data, slice_no):
     tmp = (tmp - mn)/(mx-mn)
     im = axs[1,1].imshow(tmp, cmap=plt.cm.get_cmap('Greys'),  origin='lower')
     axs[1, 1].set(xlabel='x axis', ylabel='z axis')
+    
+    axs[2, 0].imshow(data[slice_no,:,:], cmap=plt.cm.get_cmap('Greys'), origin='lower')
+    axs[2, 0].set(xlabel='x axis', ylabel='z axis')
+    
+    tmp = noisy_data[slice_no,:,:]
+    mn = np.amin(tmp)
+    mx = np.amax(tmp)
+    tmp = (tmp - mn)/(mx-mn)
+    im = axs[2,1].imshow(tmp, cmap=plt.cm.get_cmap('Greys'),  origin='lower')
+    axs[2, 1].set(xlabel='x axis', ylabel='z axis')
 
     fig.colorbar(im, ax=axs[:,:])
 

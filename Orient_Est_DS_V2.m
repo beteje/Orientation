@@ -1,10 +1,10 @@
-function Angle = Orient_Est_DS_V2(vol,W,res)
+function [azimuth, elevation] = Orient_Est_DS_V2(vol,W,res)
 % function determines the dominate 2D orientation of texture in the volume 
 % im. The computation is performed in a local window of size W by W by W.
 
 %%
 % Define size and sigma for Gaussian filters
-s = 6;      % Size of 3D Gaussian filters (filters are s by s by 2 voxels in size)
+s = floor(W/2);      % Size of 3D Gaussian filters (filters are s by s by 2 voxels in size)
 sigma = (s+2)/4;  % Sigma value of the 3D Gaussians (assuming symmetrical Gaussians)
 
 % determine size of image:
@@ -76,9 +76,9 @@ N_angle1 = numel(angle_vector1);
 %% 2D Search
 % % Initialise 5D Matrix to hold data
 % A = zeros(M,N,P,N_angle1,N_angle2);
-min_Values = ones(M,N,P, 'single', 'gpuArray')*10;
-theta_angle = -ones(M,N,P, 'single', 'gpuArray');
-phi_angle = -ones(M,N,P, 'single', 'gpuArray');
+min_Values = ones(M,N,P, 'single', 'gpuArray')*100000;
+dominant_theta = -ones(M,N,P, 'single', 'gpuArray');
+dominant_phi = -ones(M,N,P, 'single', 'gpuArray');
 % for loop to calculate the individual images for each value of theta:
 for index1 = 1:N_angle1
     fprintf('Theta Angle: %d\n',index1);
@@ -101,7 +101,8 @@ for index1 = 1:N_angle1
 %         min_Values(replace_Values) = test_Values(replace_Values);
 %         Dom_angle_theta(replace_Values) = theta_est;
 %         Dom_angle_phi(replace_Values) = phi_est;
-        [min_Values,theta_angle,phi_angle] = arrayfun(@replace_Values,min_Values,testGPU,theta_angle,phi_angle,theta_est,phi_est);
+        [min_Values,dominant_theta,dominant_phi] = arrayfun(@replace_Values,...
+            min_Values,testGPU,dominant_theta,dominant_phi,theta_est,phi_est);
     end
 
 end
@@ -123,10 +124,10 @@ end
 % Dom_angle_theta(index) = 180-Dom_angle_theta(index);
 
 % Convert to radian:
-Dom_angle_phi = gather(phi_angle);
-Dom_angle_theta = gather(theta_angle);
-Angle = Dom_angle_phi.*pi/180;
-Angle(:,:,:,2) = Dom_angle_theta.*pi/180;
+azimuth = gather(dominant_phi);
+elevation = gather(dominant_theta);
+% Angle = Dom_angle_phi.*pi/180;
+% Angle(:,:,:,2) = Dom_angle_theta.*pi/180;
 
 
 end
@@ -142,9 +143,9 @@ function im=local_sum(im,W)
 % J = imfilter(shiftdim(J,1), FA,'symmetric');
 % J = imfilter(shiftdim(J,1), FA,'symmetric');
 % J = shiftdim(J,1)/(W*W*W);
-im = movsum(im, W, 1);
-im = movsum(shiftdim(im,1), W, 1);
-im = movsum(shiftdim(im,1), W, 1);
+im = movmean(im, W, 1);
+im = movmean(shiftdim(im,1), W, 1);
+im = movmean(shiftdim(im,1), W, 1);
 im = shiftdim(im,1);
 end
 
