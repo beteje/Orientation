@@ -1,10 +1,10 @@
-function [azimuth, elevation] = Orient_Est_DS_V2(vol,W,res)
+function [azimuth,elevation,circularity] = Orient_Est_DS_V2(vol,W_est,W_circ,Thresh_circ,res)
 % function determines the dominate 2D orientation of texture in the volume 
 % im. The computation is performed in a local window of size W by W by W.
 
 %%
 % Define size and sigma for Gaussian filters
-s = floor(W/2);      % Size of 3D Gaussian filters (filters are s by s by 2 voxels in size)
+s = floor(W_est/2);      % Size of 3D Gaussian filters (filters are s by s by 2 voxels in size)
 sigma = (s+2)/4;  % Sigma value of the 3D Gaussians (assuming symmetrical Gaussians)
 
 % determine size of image:
@@ -15,18 +15,6 @@ sigma = (s+2)/4;  % Sigma value of the 3D Gaussians (assuming symmetrical Gaussi
 %--------------------------------------------------------------------------
 % Create Gaussian Filters: 
 %--------------------------------------------------------------------------
-% disp('Calculating Orientation of Stress Fibres....');
-% Create i and j coordinates for the filters:
-% [i,j,k] = meshgrid(-s:s,-s:s,-s:s);
-% % Create filters:
-% hx = (2.*i./sigma^2).*exp( -(i.^2 + j.^2 + k.^2)./sigma^2);    % filter in x
-% hy = (2.*j./sigma^2).*exp( -(i.^2 + j.^2 + k.^2)./sigma^2);    % filter in y
-% hz = (2.*k./sigma^2).*exp( -(i.^2 + j.^2 + k.^2)./sigma^2);    % filter in z
-% 
-% hx=hx/sum(sum(sum(i.*hx)));
-% hy=hy/sum(sum(sum(j.*hy)));
-% hz=hz/sum(sum(sum(k.*hz)));
-
 % Define 1D filters:
 g=@(x)exp(-x.*x/sigma^2);     % 1D Gaussian function
 G= g(-s:s);
@@ -41,16 +29,9 @@ G=G.'/norm(G,1);
 %--------------------------------------------------------------------------
 
 % Compute gradients using filtering:
-
-% Gx = imfilter(im,hx,'symmetric');   % Gradient in x
-% Gy = imfilter(im,hy,'symmetric');   % Gradient in y
-% Gz = imfilter(im,hz,'symmetric');   % Gradient in z
-
-% More efficient filtering:
 Gx = Quick3DFilter(vol,Gd,G,1);
 Gy = Quick3DFilter(vol,Gd,G,2);
 Gz = Quick3DFilter(vol,Gd,G,3);
-
 
 % calculate magnitude and angles for gradient assuming it is a 3D vector:
 G = single(sqrt(abs(Gx).^2 + abs(Gy).^2 + abs(Gz).^2));      % Magnitude
@@ -60,6 +41,28 @@ phi(phi<0) = phi(phi<0)+2*pi;
 % Elevation angle (in radians):
 theta = single(acos(Gz./G));
 
+%%
+%--------------------------------------------------------------------------
+% Determine whether each of the planes is circular in local window:
+%--------------------------------------------------------------------------
+Gxy = gpuArray(Gx + 1j*Gy);
+Gxz = gpuArray(Gx + 1j*Gz);
+Gyz = gpuArray(Gy + 1j*Gz);
+
+Rxy = local_average(abs(Gxy).^2, W_circ);
+Rxz = local_average(abs(Gxz).^2, W_circ);
+Ryz = local_average(abs(Gyz).^2, W_circ);
+
+R1xy = local_average(Gxy.^2, W_circ);
+R1xz = local_average(Gxz.^2, W_circ);
+R1yz = local_average(Gyz.^2, W_circ);
+
+Circularity_XY = abs(R1xy).^2./Rxy.^2;
+Circularity_XZ = abs(R1xz).^2./Rxz.^2;
+Circularity_YZ = abs(R1yz).^2./Ryz.^2;
+
+circularity = zeros(M,N,P);
+circularity(Circularity_XY>Thresh_circ | Circularity_XZ>Thresh_circ | Circularity_YZ>Thresh_circ) = 1;
 
 %%
 %--------------------------------------------------------------------------
@@ -74,8 +77,6 @@ N_angle1 = numel(angle_vector1);
 
 
 %% 2D Search
-% % Initialise 5D Matrix to hold data
-% A = zeros(M,N,P,N_angle1,N_angle2);
 min_Values = ones(M,N,P, 'single', 'gpuArray')*100000;
 dominant_theta = -ones(M,N,P, 'single', 'gpuArray');
 dominant_phi = -ones(M,N,P, 'single', 'gpuArray');
@@ -91,58 +92,24 @@ for index1 = 1:N_angle1
         test_Values = G.*abs(cos(theta_est).*cos(theta) + sin(theta_est).*sin(theta).*cos((phi_est-phi)));
         testGPU = gpuArray(test_Values);
 
-        % perform local summation:
-%         A(:,:,:,index1,index2) = local_sum(holder,W);
-%         test_Values = local_sum(test_Values, W);
-        testGPU = local_sum(testGPU, W);
+        % perform local average:
+        testGPU = local_average(testGPU, W_est);
 
         % find the values to replace
-%         replace_Values = test_Values < min_Values;
-%         min_Values(replace_Values) = test_Values(replace_Values);
-%         Dom_angle_theta(replace_Values) = theta_est;
-%         Dom_angle_phi(replace_Values) = phi_est;
         [min_Values,dominant_theta,dominant_phi] = arrayfun(@replace_Values,...
             min_Values,testGPU,dominant_theta,dominant_phi,theta_est,phi_est);
     end
 
 end
 
-% find the minimum solution:
-% [~,i2] = min(reshape(A,M,N,P,N_angle1*N_angle2),[],4);
-% [i1,i2] = ind2sub([N_angle1,N_angle2],i2(:));
-% Dom_angle_phi = reshape(angle_vector2(i2),M,N,P);           % phi
-% Dom_angle_theta = reshape(angle_vector1(i1),M,N,P);         % theta
-
-% Determine sub pixel accuracy:
-% [Delta_theta,Delta_phi]=subSample2D(A,i1,i2,res,res);
-% Dom_angle_phi = Dom_angle_phi + reshape(Delta_phi,M,N,P);
-% Dom_angle_theta = Dom_angle_theta + reshape(Delta_theta,M,N,P);
-
-% Deal with any cases where phi<0:
-% index = Dom_angle_phi<0;
-% Dom_angle_phi(index) = Dom_angle_phi(index)+180;
-% Dom_angle_theta(index) = 180-Dom_angle_theta(index);
-
-% Convert to radian:
+% Gather results from GPU:
 azimuth = gather(dominant_phi);
 elevation = gather(dominant_theta);
-% Angle = Dom_angle_phi.*pi/180;
-% Angle(:,:,:,2) = Dom_angle_theta.*pi/180;
-
-
 end
 
 %% Embedded functions 
-function im=local_sum(im,W)
-%% Performs summation over local region
-% J=imfilter(im,ones(W,W,W),'symmetric');
-% FA = ones([W 1 1]);
-% % FA = reshape(F,[length(F) 1 1]);
-% J = imfilter(im, FA,'symmetric');
-% clear im;
-% J = imfilter(shiftdim(J,1), FA,'symmetric');
-% J = imfilter(shiftdim(J,1), FA,'symmetric');
-% J = shiftdim(J,1)/(W*W*W);
+function im=local_average(im,W)
+%% Performs averaging over local region
 im = movmean(im, W, 1);
 im = movmean(shiftdim(im,1), W, 1);
 im = movmean(shiftdim(im,1), W, 1);
@@ -181,83 +148,3 @@ switch index
         G_out = shiftdim(G_out,1);
 end
 end
-
-% function [Delta_x,Delta_y]=subSample2D(Data,index_x,index_y,res_x,res_y)
-% %% Determine subsample accuracy of a peak based on 2D fitting using the
-% % form y = Ax^2 + By^2 + Cx + Dy + Exy + F
-% 
-% % Size of A
-% [M,N,P,Q,R] = size(Data);
-% 
-% % indexing coordinates:
-% [Y,X,Z] = meshgrid(1:M,1:N,1:P);
-% 
-% % Define x indices:
-% index_x11 = index_x-1;
-% index_x11(index_x11==0) = Q;
-% index_x12 = index_x11;
-% index_x13 = index_x11;
-% index_x21 = index_x;
-% index_x23 = index_x;
-% index_x31 = index_x+1;
-% index_x31(index_x31==Q+1) = 1;
-% index_x32 = index_x31;
-% index_x33 = index_x31;
-% 
-% % Define y indices:
-% index_y1 = index_y-1;
-% holder1 = logical(index_y1==0);
-% index_y1(holder1==1) = R;
-% index_x11(holder1==1) = Q-index_x11(holder1==1)+2;
-% index_x21(holder1==1) = Q-index_x21(holder1==1)+2;
-% index_x31(holder1==1) = Q-index_x31(holder1==1)+2;
-% index_x11(index_x11==Q+1) = 1;
-% index_x21(index_x21==Q+1) = 1;
-% index_x31(index_x31==Q+1) = 1;
-% 
-% index_y3 = index_y+1;
-% holder1 = logical(index_y3==(R+1));
-% index_y3(holder1==1) = 1;
-% index_x13(holder1==1) = Q-index_x13(holder1==1)+2;
-% index_x23(holder1==1) = Q-index_x23(holder1==1)+2;
-% index_x33(holder1==1) = Q-index_x33(holder1==1)+2;
-% index_x13(index_x13==Q+1) = 1;
-% index_x23(index_x23==Q+1) = 1;
-% index_x33(index_x33==Q+1) = 1;
-% 
-% % Obtain coefficients:
-% F = Data(sub2ind([M,N,P,Q,R],X(:),Y(:),Z(:),index_x(:),index_y(:)));
-% 
-% % determine A:
-% A = 0.5.*(Data(sub2ind([M,N,P,Q,R],X(:),Y(:),Z(:),index_x32(:),index_y(:))) + ...
-%     Data(sub2ind([M,N,P,Q,R],X(:),Y(:),Z(:),index_x12(:),index_y(:)))) - F;
-% 
-% % determine B:
-% B = 0.5.*(Data(sub2ind([M,N,P,Q,R],X(:),Y(:),Z(:),index_x23(:),index_y3(:))) + ...
-%     Data(sub2ind([M,N,P,Q,R],X(:),Y(:),Z(:),index_x21(:),index_y1(:)))) - F;
-% 
-% % determine C:
-% Z1 = Data(sub2ind([M,N,P,Q,R],X(:),Y(:),Z(:),index_x33(:),index_y3(:)));
-% C = 0.5.*(Z1 + Data(sub2ind([M,N,P,Q,R],X(:),Y(:),Z(:),index_x31(:),index_y1(:))))...
-%     -A-B-F;
-% 
-% % determine D:
-% D = 0.5.*(Z1 + Data(sub2ind([M,N,P,Q,R],X(:),Y(:),Z(:),index_x13(:),index_y3(:))))...
-%     -A-B-F;
-% 
-% % Determine E:
-% E = Data(sub2ind([M,N,P,Q,R],X(:),Y(:),Z(:),index_x11(:),index_y1(:))) - A- B + C + D - F;
-% 
-% % determine shifts:
-% Denom = 4.*A.*B - E.^2;
-% 
-% % x:
-% Delta_x = -(2.*B.*C-D.*E)./Denom.*res_x;
-% Delta_x(isnan(Delta_x)) = 0;
-% Delta_x(abs(Delta_x)>res_x)=0;
-% 
-% % y:
-% Delta_y = -(2.*A.*D-C.*E)./Denom.*res_y;
-% Delta_y(isnan(Delta_y)) = 0;
-% Delta_y(abs(Delta_y)>res_y)=0;
-% end

@@ -90,7 +90,7 @@ def plot_histogram(data, xlabel, xlims, barcolor):
     num_bins = int((xlims[1] - xlims[0])/5)
     
     # plot the histogram
-    fig = plt.figure(figsize=(12,8))
+    fig = plt.figure(figsize=(14,8))
     ax = fig.add_subplot(111)
     n, bins, patches = ax.hist(data, num_bins, xlims, color=barcolor, rwidth=0.8, weights=weights)
     
@@ -98,23 +98,23 @@ def plot_histogram(data, xlabel, xlims, barcolor):
     ax.set_xlim(xlims)
     ax.xaxis.set_major_locator(MultipleLocator(10))
     ax.xaxis.set_minor_locator(MultipleLocator(5))
-    ax.tick_params(axis='x', labelsize=16, which='major', direction='out', length=8, width=2)
+    ax.tick_params(axis='x', labelsize=20, which='major', direction='out', length=8, width=2)
     ax.tick_params(axis='x', which='minor', direction='out', length=4, width=2)
-    ax.set_xlabel(xlabel + ' (deg.)', labelpad=2, fontsize=20, color='black')
+    ax.set_xlabel(xlabel + ' (deg.)', labelpad=2, fontsize=30, color='black')
     
     # set the y-axis ticks & labels
-    ax.ticklabel_format(axis='y', style='sci', scilimits=(-2, 2))
-    ax.yaxis.set_major_locator(MaxNLocator(nbins=6, min_n_ticks=6))
-    ax.yaxis.set_minor_locator(MultipleLocator(5))
-    ax.tick_params(axis='y', labelsize=16, which='major', direction='out', length=8, width=2)
+    ax.set_ylim((0, 1))
+    ax.yaxis.set_major_locator(MultipleLocator(0.1))
+    ax.yaxis.set_minor_locator(MultipleLocator(0.05))
+    ax.tick_params(axis='y', labelsize=20, which='major', direction='out', length=8, width=2)
     ax.tick_params(axis='y', which='minor', direction='out', length=4, width=2)
     vals = ax.get_yticks()
-    ax.set_yticklabels(['{:3.1f}'.format(x*100) for x in vals])
-    ax.set_ylabel('Frequency of Occurrence (%)', labelpad=2, fontsize=20, color='black')
+    ax.set_yticklabels(['{:3.0f}'.format(x*100) for x in vals])
+    ax.set_ylabel('Frequency of Occurrence (%)', labelpad=2, fontsize=30, color='black')
     
     # set general figure options
     ax.xaxis.grid(False)
-    ax.yaxis.grid(False)
+    ax.yaxis.grid(True)
     ax.set_axisbelow(True)
     
     plt.tight_layout()
@@ -143,48 +143,50 @@ def plot_color_wheel(az_lim, ev_lim):
     
     ax.set_ylim((0, az_len))
     ax.set_yticks(np.linspace(0, az_len, num=7))
-    ax.set_yticklabels(np.linspace(az_lim[0], az_lim[1], num=7).astype(np.int32))
+    ax.set_yticklabels(np.linspace(az_lim[0], az_lim[1], num=4).astype(np.int32))
     
-    ax.set_xlabel('Elevation', fontsize=10, labelpad=0, color='k')
-    ax.set_ylabel('Azimuth', fontsize=10, labelpad=0, color='k')
+    ax.set_xlabel('Elevation', fontsize=30, labelpad=0, color='k')
+    ax.set_ylabel('Azimuth', fontsize=30, labelpad=0, color='k')
     
-    ax.tick_params(direction='out', length=2, width=0, labelsize=10, pad=0, colors='k')
+    ax.tick_params(direction='out', length=2, width=0, labelsize=20, pad=0, colors='k')
     
     ax.imshow(rgb_array)
     plt.show()
 
 # -----------------------------------------------------------------------------
-def plot_slices(data, noisy_data, slice_no):
-    fig, axs = plt.subplots(3, 2)
-    axs[0, 0].imshow(data[:, :, slice_no], cmap=plt.cm.get_cmap('Greys'), origin='lower')
+def plot_slices(volume, PSNR, slice_no):
+    fig, axs = plt.subplots(3, len(PSNR)+1)
+    axs[0, 0].imshow(volume['data'][:, :, slice_no], cmap=plt.cm.get_cmap('Greys'), origin='lower')
     axs[0, 0].set(xlabel='x axis', ylabel='y axis')
-
-    tmp = noisy_data[:, :, slice_no]
-    mn = np.amin(tmp)
-    mx = np.amax(tmp)
-    tmp = (tmp - mn)/(mx-mn)
-    axs[0, 1].imshow(tmp, cmap=plt.cm.get_cmap('Greys'),  origin='lower')
-    axs[0, 1].set(xlabel='x axis', ylabel='y axis')
-
-    axs[1, 0].imshow(data[:,slice_no,:], cmap=plt.cm.get_cmap('Greys'), origin='lower')
+    
+    axs[1, 0].imshow(volume['data'][:,slice_no,:], cmap=plt.cm.get_cmap('Greys'), origin='lower')
     axs[1, 0].set(xlabel='x axis', ylabel='z axis')
 
-    tmp = noisy_data[:,slice_no,:]
-    mn = np.amin(tmp)
-    mx = np.amax(tmp)
-    tmp = (tmp - mn)/(mx-mn)
-    im = axs[1,1].imshow(tmp, cmap=plt.cm.get_cmap('Greys'),  origin='lower')
-    axs[1, 1].set(xlabel='x axis', ylabel='z axis')
-    
-    axs[2, 0].imshow(data[slice_no,:,:], cmap=plt.cm.get_cmap('Greys'), origin='lower')
+    axs[2, 0].imshow(volume['data'][slice_no,:,:], cmap=plt.cm.get_cmap('Greys'), origin='lower')
     axs[2, 0].set(xlabel='x axis', ylabel='z axis')
+
+    for i in range(len(PSNR)):
+        nme = 'noisy_data_' + str(PSNR[i])
+        tmp = volume[nme][:, :, slice_no]
+        mn = np.amin(tmp)
+        mx = np.amax(tmp)
+        tmp = (tmp - mn)/(mx-mn)
+        axs[0, i+1].imshow(tmp, cmap=plt.cm.get_cmap('Greys'),  origin='lower')
+        axs[0, i+1].set(xlabel='x axis', ylabel='y axis')
+
+        tmp = volume[nme][:,slice_no,:]
+        mn = np.amin(tmp)
+        mx = np.amax(tmp)
+        tmp = (tmp - mn)/(mx-mn)
+        im = axs[1, i+1].imshow(tmp, cmap=plt.cm.get_cmap('Greys'),  origin='lower')
+        axs[1, i+1].set(xlabel='x axis', ylabel='z axis')
     
-    tmp = noisy_data[slice_no,:,:]
-    mn = np.amin(tmp)
-    mx = np.amax(tmp)
-    tmp = (tmp - mn)/(mx-mn)
-    im = axs[2,1].imshow(tmp, cmap=plt.cm.get_cmap('Greys'),  origin='lower')
-    axs[2, 1].set(xlabel='x axis', ylabel='z axis')
+        tmp = volume[nme][slice_no,:,:]
+        mn = np.amin(tmp)
+        mx = np.amax(tmp)
+        tmp = (tmp - mn)/(mx-mn)
+        im = axs[2, i+1].imshow(tmp, cmap=plt.cm.get_cmap('Greys'),  origin='lower')
+        axs[2, i+1].set(xlabel='x axis', ylabel='z axis')
 
     fig.colorbar(im, ax=axs[:,:])
 

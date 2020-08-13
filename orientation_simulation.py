@@ -1,7 +1,7 @@
 import numpy as np
 from skimage.draw import circle
-# from skimage.morphology import ball
 from scipy import ndimage as ndi
+from random import choice
 import multiprocessing
 from itertools import repeat
 import fill_voids
@@ -49,14 +49,15 @@ def make_volume(volume_size, n_fibres, elvtn_rng, azth_rng, radius_lim, length_l
                 n_fails = 0
                 print("The number of generated fibres is {}".format(n_generated))
     
-    # add noise to the data
-    noisy_data = add_noise(volume, PSNR, smooth_lvl)
-    
     out = {'data': volume,
-           'noisy_data': noisy_data,
            'elvtn': elvtn_data,
            'azth': azth_data,
            'diameter': diameter}
+    
+    for i in range(len(PSNR)):
+        # add noise to the data
+        nme = 'noisy_data_' + str(PSNR[i])
+        out[nme] = add_noise(volume, PSNR[i], smooth_lvl)
 
     return out
 
@@ -74,8 +75,9 @@ def generate_fibre(volume_size, length_lim, radius_lim, azth_rng, elvtn_rng, gap
         offset = [np.random.uniform(olim[0], olim[1]) for olim in zip(-np.array(volume_size)/2, np.array(volume_size)/2)]
         offset = np.round(offset).astype(np.int32)
         # set the angles of the fibre
-        azth = np.random.uniform(np.deg2rad(azth_rng[0]), np.deg2rad(azth_rng[1]))
-        elvtn = np.random.uniform(np.deg2rad(elvtn_rng[0]), np.deg2rad(elvtn_rng[1]))
+        ch = choice(range(len(azth_rng)))
+        azth = np.random.uniform(np.deg2rad(azth_rng[ch][0]), np.deg2rad(azth_rng[ch][1]))
+        elvtn = np.random.uniform(np.deg2rad(elvtn_rng[ch][0]), np.deg2rad(elvtn_rng[ch][1]))
         # set the radius of the fibre
         radius = np.random.uniform(radius_lim[0], radius_lim[1])
           
