@@ -2,8 +2,11 @@ import numpy as np
 from vispy import app, gloo
 from vispy.util.transforms import perspective, translate, rotate
 from matplotlib import pyplot as plt
-from matplotlib.ticker import MultipleLocator, MaxNLocator
+from matplotlib.ticker import MultipleLocator
 from matplotlib.colors import hsv_to_rgb
+import imageio
+from pygifsicle import optimize
+from time import sleep
 
 vertex = """
 // Uniforms
@@ -142,7 +145,7 @@ def plot_color_wheel(az_lim, ev_lim):
     ax.set_xticklabels(np.linspace(ev_lim[0], ev_lim[1], num=4).astype(np.int32))
     
     ax.set_ylim((0, az_len))
-    ax.set_yticks(np.linspace(0, az_len, num=7))
+    ax.set_yticks(np.linspace(0, az_len, num=4))
     ax.set_yticklabels(np.linspace(az_lim[0], az_lim[1], num=4).astype(np.int32))
     
     ax.set_xlabel('Elevation', fontsize=30, labelpad=0, color='k')
@@ -198,7 +201,7 @@ def plot_slices(volume, PSNR, slice_no):
 # -----------------------------------------------------------------------------
 class Canvas(app.Canvas):
     def __init__(self):
-        app.Canvas.__init__(self, keys='interactive', size=(800, 600))
+        app.Canvas.__init__(self, keys='interactive', size=(600, 600))
         
         # set the vertices and indices for the axes lines
         self.vAxes, self.iAxes = axes()
@@ -308,20 +311,54 @@ class Canvas(app.Canvas):
             self.data_prog['u_view'] = self.view
             self.axes_prog['u_view'] = self.view
             self.update()
-
+      
+    # ---------------------------------
+    def create_animation(self, fname):
+        # sleep briefly to prevent non-exposed window warnings
+        self.app.sleep(0.05)
+        # Set the frames per second
+        fps = 20
+        # Set the number of steps and number of degrees to update by
+        # (Gives approx 1 rotation every 10 seconds)
+        n_steps = fps*10
+        n_degrees = 360/n_steps
+        writer = imageio.get_writer(fname, fps=fps)
+        for i in range(n_steps * 2):
+            im = self.render()      
+            im = im[50:550,50:550,0:3]
+            writer.append_data(im)
+            if i >= n_steps:
+                self.phi += n_degrees
+            else:
+                self.theta += n_degrees
+        
+            # adjust the model based on a rotation of theta round the x-axis and phi round the z-axis
+            self.model = np.dot(rotate(self.theta, (1, 0, 0)),
+                               rotate(self.phi, (0, 1, 0)))
+            
+            self.data_prog['u_model'] = self.model
+            self.axes_prog['u_model'] = self.model
+            self.update()
+            
+        writer.close() 
+        optimize(fname)
+      
 # -----------------------------------------------------------------------------            
 if __name__ == '__main__':
     # create a canvas
     c = Canvas()
     # produce some data to put into the canvas
-    n = 10000
+    n = 500
     ps = c.pixel_scale
     data = np.zeros(n, [('a_position', np.float32, 3),
                         ('a_color', np.float32, 4),
                         ('a_size', np.float32)])
     tmp = 0.45 * np.random.randn(n,3)
     data['a_position'] = 2 * ((tmp - np.amin(tmp)) / (np.amax(tmp) - np.amin(tmp))) - 1
-    data['a_color'] = np.random.uniform(0.5, 1.00, (n, 4))
+    data['a_color'] = np.concatenate((np.random.uniform(0.5, 1.00, (n, 3)), np.ones((n,1))), axis=1)
     data['a_size']   = np.ones(n) * 20. * ps
     c.data_prog.bind(gloo.VertexBuffer(data))
     c.app.run()
+    
+    # create a gif of the canvas rotating
+    c.create_animation('bubbles.gif')

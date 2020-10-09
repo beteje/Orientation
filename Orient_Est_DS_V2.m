@@ -9,7 +9,7 @@ sigma = (s+2)/4;  % Sigma value of the 3D Gaussians (assuming symmetrical Gaussi
 
 % determine size of image:
 [M,N,P] = size(vol);
-
+vol = single(vol);
 
 %%
 %--------------------------------------------------------------------------

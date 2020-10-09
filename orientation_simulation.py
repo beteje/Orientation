@@ -6,7 +6,7 @@ import multiprocessing
 from itertools import repeat
 import fill_voids
 
-def make_volume(volume_size, n_fibres, elvtn_rng, azth_rng, radius_lim, length_lim, gap, intersect, PSNR, smooth_lvl):
+def make_volume(volume_size, n_fibres, elvtn_rng, azth_rng, radius_lim, length_lim, gap, PSNR):
     # set limits for the data generation
     max_fails = 100
     # median_rad = 3
@@ -30,14 +30,13 @@ def make_volume(volume_size, n_fibres, elvtn_rng, azth_rng, radius_lim, length_l
 
         for f in fibres:
             # if intersection is not allowed check if any fibres already exist in the gap region
-            if not intersect:
-                if np.any(volume[f['gap_fibre'][:, 0], f['gap_fibre'][:, 1], f['gap_fibre'][:, 2]]):
-                    n_fails += 1
-                    print("The number of fails is {}".format(n_fails))
-                    if n_fails == max_fails:
-                        print("Maximum number of fails exceeded. Generated {} fibres".format(n_generated))
+            if np.any(volume[f['gap_fibre'][:, 0], f['gap_fibre'][:, 1], f['gap_fibre'][:, 2]]):
+                n_fails += 1
+                print("The number of fails is {}".format(n_fails))
+                if n_fails == max_fails:
+                    print("Maximum number of fails exceeded. Generated {} fibres".format(n_generated))
 
-                    continue
+                continue
             
             if n_generated < n_fibres:
                 # add the fibre to the volume
@@ -50,14 +49,14 @@ def make_volume(volume_size, n_fibres, elvtn_rng, azth_rng, radius_lim, length_l
                 print("The number of generated fibres is {}".format(n_generated))
     
     out = {'data': volume,
-           'elvtn': elvtn_data,
-           'azth': azth_data,
+           'elevation': elvtn_data,
+           'azimuth': azth_data,
            'diameter': diameter}
     
     for i in range(len(PSNR)):
         # add noise to the data
         nme = 'noisy_data_' + str(PSNR[i])
-        out[nme] = add_noise(volume, PSNR[i], smooth_lvl)
+        out[nme] = add_noise(volume, PSNR[i])
 
     return out
 
@@ -159,35 +158,23 @@ def generate_fibre(volume_size, length_lim, radius_lim, azth_rng, elvtn_rng, gap
     
     return {'fibre': fibre, 'gap_fibre': gap_fibre, 'elvtn': elvtn, 'azth': azth, 'radius': radius}
 
-def add_noise(data, PSNR, smooth_lvl):    
+def add_noise(data, PSNR):    
     data = data.astype(np.float32)
     # generate Gaussian noise
     noise = np.random.randn(*data.shape)
     
     # calculate the required standard deviation of the noise
-    # sigma = np.sqrt(10 ** (-SNR / 10) * np.sum(data**2) / np.sum(noise**2))
     sigma = np.sqrt(10 ** (-PSNR / 10) * (np.max(np.abs(data)) **2) / np.mean(noise**2))
     
     # add the noise to the data
     noisy_data = data + sigma * noise
     
-    # smooth the noisy data by the required amount
-    if smooth_lvl != 0.:
-        noisy_data = ndi.gaussian_filter(noisy_data, smooth_lvl)
-    
     return noisy_data
 
 
 if __name__ == '__main__':
-    # aligned:
     elvtn_rng = (30, 30)
     azth_rng = (45, 45)
-    # medium: 
-    # elvtn_rng = (0, 45) 
-    # azth_rng = (-45, 45)
-    # disordered
-    # elvtn_rng = (0, 90)
-    # azth_rng = (-89, 90)
     volume_size = (128, 128, 128)
     n_fibres = 4
     radius_lim = (2, 4)
@@ -196,4 +183,4 @@ if __name__ == '__main__':
     intersect = False
     PSNR = 30
     smooth_lvl = 0
-    out = make_volume(volume_size, n_fibres, elvtn_rng, azth_rng, radius_lim, length_lim, gap, intersect, PSNR, smooth_lvl)
+    out = make_volume(volume_size, n_fibres, elvtn_rng, azth_rng, radius_lim, length_lim, gap, intersect, PSNR)
