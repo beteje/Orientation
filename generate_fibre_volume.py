@@ -21,6 +21,12 @@ class FibreVolume:
         self.azimuth = np.zeros_like(self.data, dtype=np.float32)
         self.diameter = np.zeros_like(self.data, dtype=np.float32)
         self.circularity = []
+        self.circularity_XY = []
+        self.circularity_XZ = []
+        self.circularity_YZ = []
+        self.mean_elevation = []
+        self.mean_azimuth = []
+        self.R_length = []
         self.noisy_data = {}
     
     # -------------------------------------------------------------------------           
@@ -287,6 +293,12 @@ class FibreVolume:
             f.create_dataset('azimuth', data=self.azimuth)
             f.create_dataset('elevation', data=self.elevation)
             f.create_dataset('circularity', data=self.circularity)
+            f.create_dataset('circularity_XY', data=self.circularity_XY)
+            f.create_dataset('circularity_XZ', data=self.circularity_XZ)
+            f.create_dataset('circularity_YZ', data=self.circularity_YZ)
+            f.create_dataset('mean_elevation', data=self.mean_elevation)
+            f.create_dataset('mean_azimuth', data=self.mean_azimuth)
+            f.create_dataset('R_length', data=self.R_length)
             if self.noisy_data:
                 for i in range(len(self.PSNR)):
                     nme = 'PSNR' + str(self.PSNR[i])
@@ -304,6 +316,12 @@ class FibreVolume:
         self.azimuth = f['azimuth'][()]
         self.elevation = f['elevation'][()]
         self.circularity = f['circularity'][()]
+        self.circularity_XY = f['circularity_XY'][()]
+        self.circularity_XZ = f['circularity_XZ'][()]
+        self.circularity_YZ = f['circularity_YZ'][()]
+        self.mean_elevation = f['mean_elevation'][()]
+        self.mean_azimuth = f['mean_azimuth'][()]
+        self.R_length = f['R_length'][()]
         if 'noisy_data' in f.keys():
             for i in range(len(self.PSNR)):
                 nme = 'PSNR' + str(self.PSNR[i])

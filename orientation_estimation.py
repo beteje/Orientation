@@ -126,6 +126,59 @@ def circularity_est(Gx, Gy, Gz, W, Thresh, TPB, BPG):
     return circularity
 
 #-----------------------------------------------------------------------------
+# Calculate the volume wide directionality measures 
+def directionality_est(azimuth, elevation, circularity):
+    X, Y, Z = circularity.nonzero()
+    
+    # convert to radians:
+    az = azimuth[X, Y, Z] 
+    el = elevation[X, Y, Z] 
+
+    # Generate 3D vector (adjusting for axial data):
+    Vx = np.sin(el) * np.cos(2 * az)
+    Vy = np.sin(el) * np.sin(2 * az)
+    Vz = np.cos(el)
+
+    # Generate complex numbers:
+    Vxy = Vx + 1j * Vy
+    Vyz = Vy + 1j * Vz
+    Vxz = Vx + 1j * Vz
+
+    # Calculate R values:
+    Rxy = np.mean(abs(Vxy.flatten())**2)
+    Rxz = np.mean(abs(Vyz.flatten())**2)
+    Ryz = np.mean(abs(Vxz.flatten())**2)
+
+    # Calculate R1 values:
+    R1xy = np.mean(Vxy.flatten()**2)
+    R1xz = np.mean(Vyz.flatten()**2)
+    R1yz = np.mean(Vxz.flatten()**2)
+
+    # Determine the three circularity numbers:
+    circularity_XY = abs(R1xy)**2 / Rxy**2
+    circularity_XZ = abs(R1xz)**2 / Rxz**2
+    circularity_YZ = abs(R1yz)**2 / Ryz**2
+
+    # Spherical mean:
+    x = np.zeros(3)
+    x[0] = np.mean(Vx.flatten())
+    x[1] = np.mean(Vy.flatten())
+    x[2] = np.mean(Vz.flatten())
+
+    # Mean resultant length:
+    R_length = np.sqrt(sum(abs(x)**2))
+
+    # Mean direction:
+    x_mean = x / R_length
+    az_mean = np.arctan2(x_mean[1], x_mean[0])    
+    if az_mean<0: az_mean += 2 * np.pi
+    az_mean *= 180 / np.pi / 2
+    el_mean = np.arccos(x_mean[2]) * 180 / np.pi
+    
+    return circularity_XY, circularity_YZ, circularity_XZ, R_length, az_mean, el_mean
+    
+
+#-----------------------------------------------------------------------------
 # Perform a 2D search to find the dominant angles for the azimuth and elevation
 def angle_search(G, theta, phi, res, W, TPB, BPG):
     # Determine a vector of possible orientations:
@@ -394,7 +447,7 @@ def replace_Values(orig, test, theta, phi, theta_est, phi_est):
         theta[i, j, k] = theta_est
 
 if __name__ == '__main__':
-    fld = os.getcwd() + '/'
+    fld = os.getcwd() + '/Test/'
 
     # Initialize simulation parameters  
     # volume_size = (256, 256, 256)
@@ -456,23 +509,21 @@ if __name__ == '__main__':
     az_fn = 'Data_Azimuth_' + nme[sim] + '.eps'
     volume.plot_histogram('Azimuth', (0, 180), 'darkblue')
     plt.savefig(fld + az_fn, transparent=True, bbox_inches='tight')
-
-    # Estimate orientation from the noisy data
-    results = FibreVolume()
-    results.circularity, results.azimuth, results.elevation = orientation_est(volume.noisy_data['PSNR30'], 
-                                                                              W_est, W_circ, Thresh, res, threadsperblock, blockspergrid)
-    results.plot_histogram('Elevation', (0, 180), 'darkgreen')
-    results.plot_histogram('Azimuth', (0, 180), 'darkblue')
     
     # Calculate orientation angles
     for i in range(len(PSNR)):
         results = FibreVolume()
         results.circularity, results.azimuth, results.elevation = orientation_est(volume.noisy_data['PSNR'+str(PSNR[i])], 
                                                                                   W_est, W_circ, Thresh, res, threadsperblock, blockspergrid)
+        # Determine the volume directionality measures
+        results.circularity_XY, results.circularity_YZ, results.circularity_XZ, results.R_length, results.azimuth_mean, results.elevation_mean = directionality_est(results.azimuth, 
+                                                                                                                                                                    results.elevation, results.circularity)
+        
+        # Save the results
         outFn = 'Results_' + nme[sim] + '_SNR' + str(PSNR[i]) + '.hdf5'
         results.save_volume(fld + outFn)    
 
-        # plot histograms of angles
+        # Plot histograms of angles
         el_fn = 'Results_Elevation_' + nme[sim] + '_SNR' + str(PSNR[i]) + '.eps'
         results.plot_histogram('Elevation', (0, 180), 'darkgreen')
         plt.savefig(fld + el_fn, transparent=True, bbox_inches='tight')
@@ -488,7 +539,7 @@ if __name__ == '__main__':
     print('Calculating Colours')
     sim_clrs, sim_clrs_vec = set_Colours(volume, X, Y, Z, n)
 
-    # create a 3d canvas to display the fibre orientation
+    # Create a 3d canvas to display the fibre orientation
     print('Generating Canvas')
     canvas_orig = create_Canvas(sim_clrs_vec, X, Y, Z, n, volume_size)
     canvas_orig.create_animation(fld + 'rand_orig.gif')
@@ -503,7 +554,7 @@ if __name__ == '__main__':
     print('Calculating Colours')
     results_clrs, results_clrs_vec = set_Colours(results, X, Y, Z, n)
     
-    # create a 3d canvas to display the fibre orientation
+    # Create a 3d canvas to display the fibre orientation
     print('Generating Canvas')
     canvas_results = create_Canvas(results_clrs_vec, X, Y, Z, n, volume_size)
-    canvas_results.create_animation(fld + 'rand_results30.gif')
+    canvas_results.create_animation(fld + nme[sim] + '_results30.gif')
