@@ -1,26 +1,30 @@
 #!/usr/bin/env python3
 import numpy as np
-import cupy, math, os
-from scipy import ndimage as ndi
-from numba import cuda
+import cupy as cp
+import math, os
+from cupyx.scipy import ndimage as cndi
 from vispy import gloo
+from vispy.color import ColorArray
 from matplotlib import pyplot as plt
-from matplotlib.colors import hsv_to_rgb
 from generate_fibre_volume import FibreVolume
 import plot_orientation as po
 
 #------------------------------------------------------------------------------
 # Create simulated data for each of the names corresponding to a set of angle ranges and PSNR 
-def simulate_Data(volume_size, n_fibres, elvtn_rng, azth_rng, radius_lim, length_lim, gap_lim, PSNR):
+def simulate_Data(volume_size, n_fibres, elvtn_rng, azth_rng, radius_lim, length_lim, gap_lim, PSNR, fn):
     # create the volume
-    volume = FibreVolume(volume_size=volume_size, n_fibres=n_fibres, PSNR=PSNR)
+    volume = FibreVolume(volume_size=volume_size, n_fibres=n_fibres)
     volume.make_volume(elvtn_rng=elvtn_rng, azth_rng=azth_rng, radius_lim=radius_lim, 
                        length_lim=length_lim, gap=gap_lim)
+    volume.save_volume(fn + '.hdf5')
     
-    # plot slices of original and noisy data
+    # plot slices of original noisy data
     volume.plot_slices(int(min(volume_size)/2))
     
-    return volume
+    for i in range(len(PSNR)):
+        volume.load_volume(fn + '.hdf5')
+        volume.add_noise(PSNR[i])
+        volume.save_volume(fn + '_PSNR' + str(PSNR[i]) + '.hdf5')
 
 #------------------------------------------------------------------------------
 # Create a canvas for the given colours at the specified locations
@@ -31,7 +35,7 @@ def create_Canvas(clrs, X, Y, Z, n, volume_size):
                         ('a_color', np.float32, 4),
                         ('a_size', np.float32)])
     data['a_position'] = np.array([2*X/volume_size[0]-1, 2*Y/volume_size[1]-1, 2*Z/volume_size[2]-1]).T
-    data['a_color'] = np.concatenate((clrs, np.ones((n,1))), axis=1)
+    data['a_color'] = clrs
     data['a_size'] = np.ones(n) * ps * 2 * np.sqrt(2)
     c.data_prog.bind(gloo.VertexBuffer(data))
     c.app.run()
@@ -39,89 +43,92 @@ def create_Canvas(clrs, X, Y, Z, n, volume_size):
 
 #-----------------------------------------------------------------------------
 # Define the colours for each of the identified fibre locations
-def set_Colours(volume, X, Y, Z, n):
-    clrs = np.ones((volume.volume_size[0], volume.volume_size[1], volume.volume_size[2], 3), dtype=np.float32)
-    clrs_vec = np.zeros((n,3), dtype=np.float32)
-    for i, (x, y, z) in enumerate(zip(X, Y, Z)):
-        if volume.elevation[x, y, z] / np.pi <= 0.5:
-            clrs[x, y, z] = hsv_to_rgb([volume.azimuth[x, y, z] / np.pi, 2 * volume.elevation[x, y, z] / np.pi, 1.0])
-            clrs_vec[i] = clrs[x, y, z]
-        else:
-            clrs[x, y, z] = hsv_to_rgb([volume.azimuth[x, y, z] / np.pi, 1.0, 1.5 - volume.elevation[x, y, z] / np.pi])
-            clrs_vec[i] = clrs[x, y, z]
-    return clrs, clrs_vec
+def set_Colours(elevation, azimuth):
+    hsv = np.zeros((n,3), dtype=np.float32)
+    hsv[:,0] = 360*azimuth/np.pi
+    hsv[:,1] = np.where(elevation/np.pi <=0.5, 2*elevation/np.pi, 1.0)
+    hsv[:,2] = np.where(elevation/np.pi <=0.5, 1.0, 1.5-elevation/np.pi)
+    clrs = ColorArray(color=hsv, color_space="hsv").rgba
+    return clrs
 
 #-----------------------------------------------------------------------------
 # Estimate the orientation information (circularity, azimuth angles, elevation angles)
-def orientation_est(vol, W_est, W_circ, Thresh_circ, res, TPB, BPG):
+def orientation_est(vol, W_est, W_circ, Thresh_circ, res):
     # Define size and sigma for Gaussian filters
     s = math.floor(W_est/2)             # Size of 3D Gaussian filters (filters are s by s by 2 voxels in size)
     sigma = (s+2)/4                     # Sigma value of the 3D Gaussians (assuming symmetrical Gaussians)
     
+    vol = cp.array(vol, dtype=np.float32)
+    
     # Compute gradients using filtering:
-    Gx = ndi.filters.gaussian_filter(vol, sigma, order=[1,0,0])
-    Gy = ndi.filters.gaussian_filter(vol, sigma, order=[0,1,0])
-    Gz = ndi.filters.gaussian_filter(vol, sigma, order=[0,0,1])
+    Gx = cndi.filters.gaussian_filter(vol, sigma, order=[1,0,0])
+    Gy = cndi.filters.gaussian_filter(vol, sigma, order=[0,1,0])
+    Gz = cndi.filters.gaussian_filter(vol, sigma, order=[0,0,1])
     
     # Calculate magnitude and angles for gradient assuming it is a 3D vector:
-    G = np.sqrt(abs(Gx)**2 + abs(Gy)**2 + abs(Gz)**2)       # Magnitude
+    G = cp.sqrt(abs(Gx)**2 + abs(Gy)**2 + abs(Gz)**2)     # Magnitude
     # Azimuth angle (in radians):
-    phi = np.arctan2(Gy, Gx)
+    phi = cp.arctan2(Gy, Gx)
     phi[phi<0] = phi[phi<0] + 2*np.pi
     # Elevation angle (in radians):
-    theta = np.arccos(Gz/G)
+    theta = cp.arccos(Gz/G)
     
     # Determine circularity
-    circularity = circularity_est(Gx, Gy, Gz, W_circ, Thresh_circ, TPB, BPG)
+    circularity = circularity_est(Gx, Gy, Gz, W_circ, Thresh_circ)
     
     # Determine dominant angles
-    azimuth, elevation = angle_search(G, theta, phi, res, W_est, TPB, BPG)
+    azimuth, elevation = angle_search(G, circularity, theta, phi, res, W_est)
+    
+    circularity = cp.asnumpy(circularity)
+    azimuth = cp.asnumpy(azimuth)
+    elevation = cp.asnumpy(elevation)
     
     return circularity, azimuth, elevation
  
 #-----------------------------------------------------------------------------
 # Calculate the per voxel circularity 
-def circularity_est(Gx, Gy, Gz, W, Thresh, TPB, BPG):
-    # Determine size of volume:
-    [M, N, P] = Gx.shape
-    W2 = math.floor(W/2)
+def circularity_est(Gx, Gy, Gz, W, Thresh):
+    # Calculate average region:
+    Weights = cp.ones((W,W,W), dtype=np.float32)
     
     # Determine whether each of the planes is circular in local window:
-    Gxy = cupy.array(Gx + 1j*Gy)
-    Gxz = cupy.array(Gx + 1j*Gz)
-    Gyz = cupy.array(Gy + 1j*Gz)
+    Gxy = cp.array(Gx + 1j*Gy, dtype=np.complex64)
+    Gxz = cp.array(Gx + 1j*Gz, dtype=np.complex64)
+    Gyz = cp.array(Gy + 1j*Gz, dtype=np.complex64)
+        
+    Rxy = cp.zeros(Gxy.shape, dtype=np.float32)
+    Rxz = cp.zeros(Gxz.shape, dtype=np.float32)
+    Ryz = cp.zeros(Gyz.shape, dtype=np.float32)
     
-    Rxy = cupy.zeros(Gxy.shape, dtype='float')
-    Rxz = cupy.zeros(Gxz.shape, dtype='float')
-    Ryz = cupy.zeros(Gyz.shape, dtype='float')
+    Rxy = cndi.convolve(abs(Gxy)**2, Weights)
+    Rxz = cndi.convolve(abs(Gxz)**2, Weights)
+    Ryz = cndi.convolve(abs(Gyz)**2, Weights)
     
-    local_average[BPG, TPB](abs(Gxy)**2, W, W2, Rxy)
-    local_average[BPG, TPB](abs(Gxz)**2, W, W2, Rxz)
-    local_average[BPG, TPB](abs(Gyz)**2, W, W2, Ryz)
-
-    R1xy = cupy.zeros(Gxy.shape, dtype='complex')
-    R1xz = cupy.zeros(Gxz.shape, dtype='complex')
-    R1yz = cupy.zeros(Gyz.shape, dtype='complex')
+    Gxy2 = Gxy**2
+    Gxz2 = Gxz**2
+    Gyz2 = Gyz**2
     
-    local_average[BPG, TPB](Gxy**2, W, W2, R1xy)
-    local_average[BPG, TPB](Gxz**2, W, W2, R1xz)
-    local_average[BPG, TPB](Gyz**2, W, W2, R1yz)
+    R1xy_r = cndi.convolve(cp.real(Gxy2), Weights)
+    R1xz_r = cndi.convolve(cp.real(Gxz2), Weights)
+    R1yz_r = cndi.convolve(cp.real(Gyz2), Weights)
     
-    Rxy = cupy.asnumpy(Rxy)
-    Rxz = cupy.asnumpy(Rxz)
-    Ryz = cupy.asnumpy(Ryz)
-    R1xy = cupy.asnumpy(R1xy)
-    R1xz = cupy.asnumpy(R1xz)
-    R1yz = cupy.asnumpy(R1yz)
-
+    R1xy_i = cndi.convolve(cp.imag(Gxy2), Weights)
+    R1xz_i = cndi.convolve(cp.imag(Gxz2), Weights)
+    R1yz_i = cndi.convolve(cp.imag(Gyz2), Weights)
+    
+    R1xy = R1xy_r + 1j*R1xy_i
+    R1xz = R1xz_r + 1j*R1xz_i
+    R1yz = R1yz_r + 1j*R1yz_i
+    
     Circularity_XY = abs(R1xy)**2/Rxy**2
     Circularity_XZ = abs(R1xz)**2/Rxz**2
     Circularity_YZ = abs(R1yz)**2/Ryz**2
 
-    circularity = np.zeros((M,N,P))
+    circularity = cp.zeros(Gx.shape, dtype=np.int8)
     circularity[(Circularity_XY>Thresh) + (Circularity_XZ>Thresh) + (Circularity_YZ>Thresh)] = 1 
-    
-    cupy._default_memory_pool.free_all_blocks()
+     
+    del Weights, Gxy, Gxz, Gyz, Rxy, Rxz, Ryz, R1xy_r, R1xz_r, R1yz_r, R1xy_i, R1xz_i, R1yz_i, R1xy, R1xz, R1yz, Circularity_XY, Circularity_XZ, Circularity_YZ
+    cp._default_memory_pool.free_all_blocks()
     
     return circularity
 
@@ -177,287 +184,69 @@ def directionality_est(azimuth, elevation, circularity):
     
     return circularity_XY, circularity_YZ, circularity_XZ, R_length, az_mean, el_mean
     
-
 #-----------------------------------------------------------------------------
 # Perform a 2D search to find the dominant angles for the azimuth and elevation
-def angle_search(G, theta, phi, res, W, TPB, BPG):
+def angle_search(G, circularity, theta, phi, res, W):
     # Determine a vector of possible orientations:
-    angle_vector2 = np.concatenate(([0, res/2], np.arange(res, 180, res), [180-res/2]))
-    N_angle2 = np.size(angle_vector2)
-    angle_vector1 = np.concatenate(([0, res/2], np.arange(res, 180, res), [180-res/2]))
-    N_angle1 = np.size(angle_vector1)
+    angle_vector2 = np.arange(0, 180, res)
+    N_angle2 = angle_vector2.size
+    angle_vector1 = np.arange(0, 180, res)
+    N_angle1 = angle_vector1.size
     
-    # Compute a 2D search
-    min_values = cupy.ones(G.shape, dtype='float') * 100000
-    dominant_theta = -cupy.ones(G.shape, dtype='float')
-    dominant_phi = -cupy.ones(G.shape, dtype='float')
+    # Compute a 2D search    
+    # W2 = math.floor(W/2)
+    Weights = cp.ones((W,W,W), dtype=np.float32)/(W*W*W)
+    circ_nonzero = circularity.nonzero()
+    n = len(circ_nonzero[0])
+    min_values = cp.ones(n, dtype=np.float32) * 100000
+    dominant_theta = -cp.ones(n, dtype=np.uint8)
+    dominant_phi = -cp.ones(n, dtype=np.uint8)
+    new_values = cp.empty_like(min_values)
     
     # Calculate the individual images for each value of theta:
-    W2 = math.floor(W/2)
     for i in range(N_angle1):
-        print('Theta Angle: ' + str(angle_vector1[i]))
+        print('Theta Angle: {:d}'.format(angle_vector1[i]))
         theta_est = angle_vector1[i] * np.pi/180
+        cos_theta = np.cos(theta_est)
+        sin_theta = np.sin(theta_est) 
         for j in range(N_angle2):
+            print('\tPhi Angle: {:d}'.format(angle_vector1[j]))
             # Obtain local value of phi and convert to radians:
             phi_est = angle_vector2[j] * np.pi/180
             # Calculate test:
-            test_values = cupy.array(G * abs(np.cos(theta_est) * np.cos(theta) + np.sin(theta_est) * np.sin(theta) * np.cos(phi_est-phi)))
-            return_values = cupy.zeros(G.shape, dtype='float')
+            test_values = G * abs(cos_theta * cp.cos(theta) + sin_theta * cp.sin(theta) * cp.cos(phi_est-phi))
             # Perform local average:
-            local_average[BPG, TPB](test_values, W, W2, return_values)
+            averaged_values = cndi.convolve(test_values, Weights)
+            new_values = averaged_values[circ_nonzero]
             # find the values to replace
-            replace_Values[BPG, TPB](min_values, return_values, dominant_theta, dominant_phi, theta_est, phi_est)
+            dominant_phi = cp.where(new_values < min_values, phi_est, dominant_phi)
+            dominant_theta = cp.where(new_values < min_values, theta_est, dominant_theta)
+            min_values = cp.where(new_values < min_values, new_values, min_values)
+        
+    azimuth = cp.empty_like(circularity, dtype=np.float32)
+    azimuth[:] = cp.nan
+    azimuth[circ_nonzero] = dominant_phi
+    elevation = cp.empty_like(circularity, dtype=np.float32)
+    elevation[:] = cp.nan
+    elevation[circ_nonzero] = dominant_theta
     
-    azimuth = cupy.asnumpy(dominant_phi);
-    elevation = cupy.asnumpy(dominant_theta);
-    cupy._default_memory_pool.free_all_blocks()
+    del test_values, averaged_values, min_values, new_values, dominant_phi, dominant_theta, circ_nonzero 
+    cp._default_memory_pool.free_all_blocks()
     
     return azimuth, elevation
 
 #-----------------------------------------------------------------------------
-# Cuda function to determine local 3D averages
-@cuda.jit
-def local_average(vol, W, W2, output):
-    i, j, k = cuda.grid(3)
-    x_size, y_size, z_size = vol.shape
-    
-    # start of x
-    if (i < W2):
-        # start of y
-        if (j < W2):
-            # start of z
-            if (k < W2):
-                for x in range(-i, W2+1):
-                    for y in range(-j, W2+1):
-                        for z in range(-k, W2+1):
-                            output[i, j, k] += vol[i+x, j+y, k+z]
-                output[i, j, k] = output[i, j, k] / ((W2+1+i)*(W2+1+j)*(W2+1+k))
-            # middle of z
-            elif (k <= z_size - (W2+1)):
-                for x in range(-i, W2+1):
-                    for y in range(-j, W2+1):
-                        for z in range(-W2, W2+1):
-                            output[i, j, k] += vol[i+x, j+y, k+z]
-                output[i, j, k] = output[i, j, k] / ((W2+1+i)*(W2+1+j)*W)
-            # end of z
-            elif (k < z_size):
-                for x in range(-i, W2+1):
-                    for y in range(-j, W2+1):
-                        for z in range(-W2, z_size-k):
-                            output[i, j, k] += vol[i+x, j+y, k+z]
-                output[i, j, k] = output[i, j, k] / ((W2+1+i)*(W2+1+j)*(W2+z_size-k))
-        # middle of y
-        elif (j <= y_size - (W2+1)):
-            # start of z
-            if (k < W2):
-                for x in range(-i, W2+1):
-                    for y in range(-W2, W2+1):
-                        for z in range(-k, W2+1):
-                            output[i, j, k] += vol[i+x, j+y, k+z]
-                output[i, j, k] = output[i, j, k] / ((W2+1+i)*W*(W2+1+k))
-            # middle of z
-            elif (k <= z_size - (W2+1)):
-                for x in range(-i, W2+1):
-                    for y in range(-W2, W2+1):
-                        for z in range(-W2, W2+1):
-                            output[i, j, k] += vol[i+x, j+y, k+z]
-                output[i, j, k] = output[i, j, k] / ((W2+1+i)*W*W)
-            # end of z
-            elif (k < z_size):
-                for x in range(-i, W2+1):
-                    for y in range(-W2, W2+1):
-                        for z in range(-W2, z_size-k):
-                            output[i, j, k] += vol[i+x, j+y, k+z]
-                output[i, j, k] = output[i, j, k] / ((W2+1+i)*W*(W2+z_size-k))
-        # end of y
-        elif (j < y_size):
-            # start of z
-            if (k < W2):
-                for x in range(-i, W2+1):
-                    for y in range(-W2, y_size-j):
-                        for z in range(-k, W2+1):
-                            output[i, j, k] += vol[i+x, j+y, k+z]
-                output[i, j, k] = output[i, j, k] / ((W2+1+i)*(W2+y_size-j)*(W2+1+k))
-            # middle of z
-            elif (k <= z_size - (W2+1)):
-                for x in range(-i, W2+1):
-                    for y in range(-W2, y_size-j):
-                        for z in range(-W2, W2+1):
-                            output[i, j, k] += vol[i+x, j+y, k+z]
-                output[i, j, k] = output[i, j, k] / ((W2+1+i)*(W2+y_size-j)*W)
-            # end of z
-            elif (k < z_size):
-                for x in range(-i, W2+1):
-                    for y in range(-W2, y_size-j):
-                        for z in range(-W2, z_size-k):
-                            output[i, j, k] += vol[i+x, j+y, k+z]
-                output[i, j, k] = output[i, j, k] / ((W2+1+i)*(W2+y_size-j)*(W2+z_size-k))
-    # middle of x
-    elif (i <= x_size - (W2+1)):
-        # start of y
-        if (j < W2):
-            # start of z
-            if (k < W2):
-                for x in range(-W2, W2+1):
-                    for y in range(-j, W2+1):
-                        for z in range(-k, W2+1):
-                            output[i, j, k] += vol[i+x, j+y, k+z]
-                output[i, j, k] = output[i, j, k] / (W*(W2+1+j)*(W2+1+k))
-            # middle of z
-            elif (k <= z_size - (W2+1)):
-                for x in range(-W2, W2+1):
-                    for y in range(-j, W2+1):
-                        for z in range(-W2, W2+1):
-                            output[i, j, k] += vol[i+x, j+y, k+z]
-                output[i, j, k] = output[i, j, k] / (W*(W2+1+j)*W)
-            # end of z
-            elif (k < z_size):
-                for x in range(-W2, W2+1):
-                    for y in range(-j, W2+1):
-                        for z in range(-W2, z_size-k):
-                            output[i, j, k] += vol[i+x, j+y, k+z]
-                output[i, j, k] = output[i, j, k] / (W*(W2+1+j)*(W2+z_size-k))
-        # middle of y
-        elif (j <= y_size - (W2+1)):
-            # start of z
-            if (k < W2):
-                for x in range(-W2, W2+1):
-                    for y in range(-W2, W2+1):
-                        for z in range(-k, W2+1):
-                            output[i, j, k] += vol[i+x, j+y, k+z]
-                output[i, j, k] = output[i, j, k] / (W*W*(W2+1+k))
-            # middle of z
-            elif (k <= z_size - (W2+1)):
-                for x in range(-W2, W2+1):
-                    for y in range(-W2, W2+1):
-                        for z in range(-W2, W2+1):
-                            output[i, j, k] += vol[i+x, j+y, k+z]
-                output[i, j, k] = output[i, j, k] / (W*W*W)
-            # end of z
-            elif (k < z_size):
-                for x in range(-W2, W2+1):
-                    for y in range(-W2, W2+1):
-                        for z in range(-W2, z_size-k):
-                            output[i, j, k] += vol[i+x, j+y, k+z]
-                output[i, j, k] = output[i, j, k] / (W*W*(W2+z_size-k))
-        # end of y
-        elif (j < y_size):
-            # start of z
-            if (k < W2):
-                for x in range(-W2, W2+1):
-                    for y in range(-W2, y_size-j):
-                        for z in range(-k, W2+1):
-                            output[i, j, k] += vol[i+x, j+y, k+z]
-                output[i, j, k] = output[i, j, k] / (W*(W2+y_size-j)*(W2+1+k))
-            # middle of z
-            elif (k <= z_size - (W2+1)):
-                for x in range(-W2, W2+1):
-                    for y in range(-W2, y_size-j):
-                        for z in range(-W2, W2+1):
-                            output[i, j, k] += vol[i+x, j+y, k+z]
-                output[i, j, k] = output[i, j, k] / (W*(W2+y_size-j)*W)
-            # end of z
-            elif (k < z_size):
-                for x in range(-W2, W2+1):
-                    for y in range(-W2, y_size-j):
-                        for z in range(-W2, z_size-k):
-                            output[i, j, k] += vol[i+x, j+y, k+z]
-                output[i, j, k] = output[i, j, k] / (W*(W2+y_size-j)*(W2+z_size-k))
-    # end of x
-    elif (i < x_size):
-        # start of y
-        if (j < W2):
-            # start of z
-            if (k < W2):
-                for x in range(-W2, x_size-i):
-                    for y in range(-j, W2+1):
-                        for z in range(-k, W2+1):
-                            output[i, j, k] += vol[i+x, j+y, k+z]
-                output[i, j, k] = output[i, j, k] / ((W2+x_size-i)*(W2+1+j)*(W2+1+k))
-            # middle of z
-            elif (k <= z_size - (W2+1)):
-                for x in range(-W2, x_size-i):
-                    for y in range(-j, W2+1):
-                        for z in range(-W2, W2+1):
-                            output[i, j, k] += vol[i+x, j+y, k+z]
-                output[i, j, k] = output[i, j, k] / ((W2+x_size-i)*(W2+1+j)*W)
-            # end of z
-            elif (k < z_size):
-                for x in range(-W2, x_size-i):
-                    for y in range(-j, W2+1):
-                        for z in range(-W2, z_size-k):
-                            output[i, j, k] += vol[i+x, j+y, k+z]
-                output[i, j, k] = output[i, j, k] / ((W2+x_size-i)*(W2+1+j)*(W2+z_size-k))
-        # middle of y
-        elif (j <= y_size - (W2+1)):
-            # start of z
-            if (k < W2):
-                for x in range(-W2, x_size-i):
-                    for y in range(-W2, W2+1):
-                        for z in range(-k, W2+1):
-                            output[i, j, k] += vol[i+x, j+y, k+z]
-                output[i, j, k] = output[i, j, k] / ((W2+x_size-i)*W*(W2+1+k))
-            # middle of z
-            elif (k <= z_size - (W2+1)):
-                for x in range(-W2, x_size-i):
-                    for y in range(-W2, W2+1):
-                        for z in range(-W2, W2+1):
-                            output[i, j, k] += vol[i+x, j+y, k+z]
-                output[i, j, k] = output[i, j, k] / ((W2+x_size-i)*W*W)
-            # end of z
-            elif (k < z_size):
-                for x in range(-W2, x_size-i):
-                    for y in range(-W2, W2+1):
-                        for z in range(-W2, z_size-k):
-                            output[i, j, k] += vol[i+x, j+y, k+z]
-                output[i, j, k] = output[i, j, k] / ((W2+x_size-i)*W*(W2+z_size-k))
-        # end of y
-        elif (j < y_size):
-            # start of z
-            if (k < W2):
-                for x in range(-W2, x_size-i):
-                    for y in range(-W2, y_size-j):
-                        for z in range(-k, W2+1):
-                            output[i, j, k] += vol[i+x, j+y, k+z]
-                output[i, j, k] = output[i, j, k] / ((W2+x_size-i)*(W2+y_size-j)*(W2+1+k))
-            # middle of z
-            elif (k <= z_size - (W2+1)):
-                for x in range(-W2, x_size-i):
-                    for y in range(-W2, y_size-j):
-                        for z in range(-W2, W2+1):
-                            output[i, j, k] += vol[i+x, j+y, k+z]
-                output[i, j, k] = output[i, j, k] / ((W2+x_size-i)*(W2+y_size-j)*W)
-            # end of z
-            elif (k < z_size):
-                for x in range(-W2, x_size-i):
-                    for y in range(-W2, y_size-j):
-                        for z in range(-W2, z_size-k):
-                            output[i, j, k] += vol[i+x, j+y, k+z]
-                output[i, j, k] = output[i, j, k] / ((W2+x_size-i)*(W2+y_size-j)*(W2+z_size-k))
-
-#-----------------------------------------------------------------------------
-# Cuda function to find the values in the volume to replace with the updated values
-@cuda.jit
-def replace_Values(orig, test, theta, phi, theta_est, phi_est):
-    i, j, k = cuda.grid(3)
-    # Find values where the test data is less than the minimum data
-    if test[i, j, k] < orig[i, j, k]:
-        orig[i, j, k] = test[i, j, k]
-        phi[i, j, k] = phi_est
-        theta[i, j, k] = theta_est
-
 if __name__ == '__main__':
     fld = os.getcwd() + '/Test/'
 
     # Initialize simulation parameters  
-    # volume_size = (256, 256, 256)
-    volume_size = (64, 64, 64)
-    # n_fibres = 100
-    n_fibres = 10
+    volume_size = (256,256,256)
+    n_fibres = 100
     radius_lim = (2, 10)
     length_lim = (0.3, 0.9)
     gap_lim = 1
-    PSNR = [30, 20, 10]
+    # PSNR = [30, 20, 10]
+    PSNR = [30]
     elvtn_rng = [[0, 180], [70, 100], [30, 35], [110, 115]]
     azth_rng = [[0, 180], [90, 120], [70, 75], [150, 155]]
     nme = ['random','range','single','double']
@@ -466,14 +255,7 @@ if __name__ == '__main__':
     W_est = 11
     W_circ = 7
     Thresh = 0.9
-    res = 5
-    
-    # Initialize Cuda parameters
-    threadsperblock = (8, 8, 8)
-    blockspergrid_x = math.ceil(volume_size[0] / threadsperblock[0])
-    blockspergrid_y = math.ceil(volume_size[1] / threadsperblock[1])
-    blockspergrid_z = math.ceil(volume_size[2] / threadsperblock[2])
-    blockspergrid = (blockspergrid_x, blockspergrid_y, blockspergrid_z)
+    res = 1
     
     # Choice of simulation
     print('Select a simulation:')
@@ -494,31 +276,48 @@ if __name__ == '__main__':
             print('Please select a valid simulation number')
     
     # Simulate the data
+    fn = fld + 'Data_' + nme[sim]
     if nme[sim] == 'double':
-        volume = simulate_Data(volume_size, n_fibres, elvtn_rng[sim-1:sim+1], azth_rng[sim-1:sim+1], radius_lim, length_lim, gap_lim, PSNR)
+        volume = simulate_Data(volume_size, n_fibres, elvtn_rng[sim-1:sim+1], azth_rng[sim-1:sim+1], radius_lim, length_lim, gap_lim, PSNR, fn)
     else:
-        volume = simulate_Data(volume_size, n_fibres, [elvtn_rng[sim]], [azth_rng[sim]], radius_lim, length_lim, gap_lim, PSNR)
+        volume = simulate_Data(volume_size, n_fibres, [elvtn_rng[sim]], [azth_rng[sim]], radius_lim, length_lim, gap_lim, PSNR, fn)
     
-    fn = 'Data_' + nme[sim] + '.hdf5'
-    volume.save_volume(fld + fn)  
+    plt.close()
     
     # Plot histograms of angles
+    volume = FibreVolume(volume_size=volume_size, n_fibres=n_fibres)
+    volume.load_volume(fn + '.hdf5')
     volume.plot_histogram('Elevation', (0, 180), 'darkgreen')
     el_fn = 'Data_Elevation_' + nme[sim] + '.eps'
     plt.savefig(fld + el_fn, transparent=True, bbox_inches='tight')
+    plt.close()
     az_fn = 'Data_Azimuth_' + nme[sim] + '.eps'
     volume.plot_histogram('Azimuth', (0, 180), 'darkblue')
     plt.savefig(fld + az_fn, transparent=True, bbox_inches='tight')
+    plt.close()
+    
+    # # Create a 3D canvas of the simulated data
+    X, Y, Z = volume.data.nonzero()
+    n = len(Z)
+
+    # Calculate the colours of the fibres based on their angles
+    print('Calculating Colours')
+    sim_clrs = set_Colours(volume.elevation[X, Y, Z], volume.azimuth[X, Y, Z])
+
+    # Create a 3d canvas to display the fibre orientation
+    print('Generating Canvas')
+    canvas_orig = create_Canvas(sim_clrs, X, Y, Z, n, volume_size)
+    canvas_orig.create_animation(fld + nme[sim] +'_orig.gif')
+    canvas_orig.close()
     
     # Calculate orientation angles
     for i in range(len(PSNR)):
-        results = FibreVolume()
-        results.circularity, results.azimuth, results.elevation = orientation_est(volume.noisy_data['PSNR'+str(PSNR[i])], 
-                                                                                  W_est, W_circ, Thresh, res, threadsperblock, blockspergrid)
+        volume.load_volume(fn + '_PSNR' + str(PSNR[i]) + '.hdf5')
+        results = FibreVolume(volume_size=volume_size, n_fibres=n_fibres)
+        results.circularity, results.azimuth, results.elevation = orientation_est(volume.data, W_est, W_circ, Thresh, res)
         # Determine the volume directionality measures
-        results.circularity_XY, results.circularity_YZ, results.circularity_XZ, results.R_length, results.azimuth_mean, results.elevation_mean = directionality_est(results.azimuth, 
+        results.circularity_XY, results.circularity_YZ, results.circularity_XZ, results.R_length, results.mean_azimuth, results.mean_elevation = directionality_est(results.azimuth, 
                                                                                                                                                                     results.elevation, results.circularity)
-        
         # Save the results
         outFn = 'Results_' + nme[sim] + '_SNR' + str(PSNR[i]) + '.hdf5'
         results.save_volume(fld + outFn)    
@@ -527,22 +326,11 @@ if __name__ == '__main__':
         el_fn = 'Results_Elevation_' + nme[sim] + '_SNR' + str(PSNR[i]) + '.eps'
         results.plot_histogram('Elevation', (0, 180), 'darkgreen')
         plt.savefig(fld + el_fn, transparent=True, bbox_inches='tight')
+        plt.close()
         az_fn = 'Results_Azimuth_' + nme[sim] + '_SNR' + str(PSNR[i]) + '.eps'
         results.plot_histogram('Azimuth', (0, 180), 'darkblue')
         plt.savefig(fld + az_fn, transparent=True, bbox_inches='tight')
-    
-    # Create a 3D canvas of the simulated data
-    X, Y, Z = volume.data.nonzero()
-    n = len(Z)
-
-    # Calculate the colours of the fibres based on their angles
-    print('Calculating Colours')
-    sim_clrs, sim_clrs_vec = set_Colours(volume, X, Y, Z, n)
-
-    # Create a 3d canvas to display the fibre orientation
-    print('Generating Canvas')
-    canvas_orig = create_Canvas(sim_clrs_vec, X, Y, Z, n, volume_size)
-    canvas_orig.create_animation(fld + 'rand_orig.gif')
+        plt.close()
     
     # Create a 3D canvas of the 30dB PSNR results
     results = FibreVolume()
@@ -552,9 +340,10 @@ if __name__ == '__main__':
     
     # Calculate the colours of the fibres based on their angles
     print('Calculating Colours')
-    results_clrs, results_clrs_vec = set_Colours(results, X, Y, Z, n)
+    results_clrs = set_Colours(results.elevation[X, Y, Z], results.azimuth[X, Y, Z])
     
     # Create a 3d canvas to display the fibre orientation
     print('Generating Canvas')
-    canvas_results = create_Canvas(results_clrs_vec, X, Y, Z, n, volume_size)
+    canvas_results = create_Canvas(results_clrs, X, Y, Z, n, volume_size)
     canvas_results.create_animation(fld + nme[sim] + '_results30.gif')
+    canvas_results.close()

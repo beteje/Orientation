@@ -8,18 +8,18 @@ from matplotlib.ticker import MultipleLocator
 import multiprocessing, fill_voids, h5py
 
 class FibreVolume:
-    def __init__(self, volume_size=(128, 128, 128), n_fibres=10, PSNR=[30]):
+    def __init__(self, volume_size=(128, 128, 128), n_fibres=10):
         # Size of the volume
         self.volume_size = volume_size
         # Number of fibres in the volume
         self.n_fibres = n_fibres
         # PSNR value or values for the noisy data
-        self.PSNR = PSNR
+        self.PSNR = np.inf
         # initialize data
-        self.data = np.zeros(volume_size, dtype=np.uint8)
-        self.elevation = np.zeros_like(self.data, dtype=np.float32)
-        self.azimuth = np.zeros_like(self.data, dtype=np.float32)
-        self.diameter = np.zeros_like(self.data, dtype=np.float32)
+        self.data = []
+        self.elevation = []
+        self.azimuth = []
+        self.diameter = []
         self.circularity = []
         self.circularity_XY = []
         self.circularity_XZ = []
@@ -27,11 +27,15 @@ class FibreVolume:
         self.mean_elevation = []
         self.mean_azimuth = []
         self.R_length = []
-        self.noisy_data = {}
     
     # -------------------------------------------------------------------------           
     def make_volume(self, elvtn_rng=[[30, 30]], azth_rng=[[45, 45]],  
                  radius_lim=(2, 4), length_lim=(0.2, 0.8), gap=3):
+        # initialize data
+        self.data = np.zeros(self.volume_size, dtype=np.uint8)
+        self.elevation = np.zeros_like(self.data, dtype=np.float32)
+        self.azimuth = np.zeros_like(self.data, dtype=np.float32)
+        self.diameter = np.zeros_like(self.data, dtype=np.float32)
         # set limits for the data generation
         max_fails = 100
         # median_rad = 3
@@ -66,24 +70,20 @@ class FibreVolume:
                     n_generated += 1
                     n_fails = 0
                     print("The number of generated fibres is {}".format(n_generated))
-        
-        # add noise to the data
-        self.add_noise()
     
     # -------------------------------------------------------------------------
-    def add_noise(self):    
+    def add_noise(self,PSNR):    
         data = self.data.astype(np.float32)
+        self.PSNR = PSNR
         
-        for i in range(len(self.PSNR)):
-            # generate Gaussian noise
-            noise = np.random.randn(*data.shape)
-        
-            # calculate the required standard deviation of the noise
-            sigma = np.sqrt(10** (-self.PSNR[i] / 10) * (np.max(np.abs(data))**2) / np.mean(noise**2))
-        
-            # add the noise to the data
-            nme = 'PSNR' + str(self.PSNR[i])
-            self.noisy_data.update({nme : data + sigma * noise})
+        # generate Gaussian noise
+        noise = np.random.randn(*data.shape)
+    
+        # calculate the required standard deviation of the noise
+        sigma = np.sqrt(10** (-PSNR / 10) * (np.max(np.abs(data))**2) / np.mean(noise**2))
+    
+        # add the noise to the data
+        self.data = data + sigma * noise
     
     # -------------------------------------------------------------------------
     def generate_fibre(self, volume_size, length_lim, radius_lim, azth_rng, elvtn_rng, gap, max_len_loss):
@@ -240,41 +240,17 @@ class FibreVolume:
     # -----------------------------------------------------------------------------
     def plot_slices(self, slice_no):
         # Plot slices of the original data from each dimension
-        fig, axs = plt.subplots(3, len(self.PSNR)+1)
-        axs[0, 0].imshow(self.data[:, :, slice_no], cmap=plt.cm.get_cmap('Greys'), origin='lower')
-        axs[0, 0].set(xlabel='x axis', ylabel='y axis')
+        fig, axs = plt.subplots(1, 3)
+        axs[0].imshow(self.data[:, :, slice_no], cmap=plt.cm.get_cmap('Greys'), origin='lower')
+        axs[0].set(xlabel='x axis', ylabel='y axis')
         
-        axs[1, 0].imshow(self.data[:,slice_no,:], cmap=plt.cm.get_cmap('Greys'), origin='lower')
-        axs[1, 0].set(xlabel='x axis', ylabel='z axis')
+        axs[1].imshow(self.data[:,slice_no,:], cmap=plt.cm.get_cmap('Greys'), origin='lower')
+        axs[1].set(xlabel='x axis', ylabel='z axis')
     
-        axs[2, 0].imshow(self.data[slice_no,:,:], cmap=plt.cm.get_cmap('Greys'), origin='lower')
-        axs[2, 0].set(xlabel='x axis', ylabel='z axis')
+        im = axs[2].imshow(self.data[slice_no,:,:], cmap=plt.cm.get_cmap('Greys'), origin='lower')
+        axs[2].set(xlabel='x axis', ylabel='z axis')
     
-        # Repeat for each of the different noise levels
-        for i in range(len(self.PSNR)):
-            nme = 'PSNR' + str(self.PSNR[i])
-            tmp = self.noisy_data[nme][:, :, slice_no]
-            mn = np.amin(tmp)
-            mx = np.amax(tmp)
-            tmp = (tmp - mn)/(mx-mn)
-            axs[0, i+1].imshow(tmp, cmap=plt.cm.get_cmap('Greys'),  origin='lower')
-            axs[0, i+1].set(xlabel='x axis', ylabel='y axis')
-    
-            tmp = self.noisy_data[nme][:,slice_no,:]
-            mn = np.amin(tmp)
-            mx = np.amax(tmp)
-            tmp = (tmp - mn)/(mx-mn)
-            im = axs[1, i+1].imshow(tmp, cmap=plt.cm.get_cmap('Greys'),  origin='lower')
-            axs[1, i+1].set(xlabel='x axis', ylabel='z axis')
-        
-            tmp = self.noisy_data[nme][slice_no,:,:]
-            mn = np.amin(tmp)
-            mx = np.amax(tmp)
-            tmp = (tmp - mn)/(mx-mn)
-            im = axs[2, i+1].imshow(tmp, cmap=plt.cm.get_cmap('Greys'),  origin='lower')
-            axs[2, i+1].set(xlabel='x axis', ylabel='z axis')
-    
-        fig.colorbar(im, ax=axs[:,:])
+        fig.colorbar(im, ax=axs[:])
     
         for ax in axs.flat:
             ax.label_outer()
@@ -299,10 +275,6 @@ class FibreVolume:
             f.create_dataset('mean_elevation', data=self.mean_elevation)
             f.create_dataset('mean_azimuth', data=self.mean_azimuth)
             f.create_dataset('R_length', data=self.R_length)
-            if self.noisy_data:
-                for i in range(len(self.PSNR)):
-                    nme = 'PSNR' + str(self.PSNR[i])
-                    f.create_dataset('noisy_data/'+nme, data=self.noisy_data[nme])
             
     # -----------------------------------------------------------------------------
     def load_volume(self, fname):
@@ -322,17 +294,18 @@ class FibreVolume:
         self.mean_elevation = f['mean_elevation'][()]
         self.mean_azimuth = f['mean_azimuth'][()]
         self.R_length = f['R_length'][()]
-        if 'noisy_data' in f.keys():
-            for i in range(len(self.PSNR)):
-                nme = 'PSNR' + str(self.PSNR[i])
-                self.noisy_data[nme] = f['noisy_data/'+nme][()]
            
 if __name__ == '__main__':
     out = FibreVolume()
     out.make_volume()
+    
     # plot histograms of angles
     out.plot_histogram('Elevation', (0, 180), 'darkgreen')
     out.plot_histogram('Azimuth', (0, 180), 'darkblue')
     
-    # plot slices of original and noisy data
+    # plot slices
+    out.plot_slices(64)
+    
+    out.add_noise(10)
+    
     out.plot_slices(64)
